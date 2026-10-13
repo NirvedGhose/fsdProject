@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
+
 import gsap from 'gsap';
 import { Flip } from 'gsap/Flip';
 import { useGSAP } from '@gsap/react';
 import { api } from './api.js';
-
+import EvidenceWall from './EvidenceWall.jsx';
+import './EvidenceWall.css';
 gsap.registerPlugin(Flip);
+
 
 const COLS = [['open', 'Open'], ['verified', 'Verified'], ['dismissed', 'Dismissed']];
 const ext = (n) => (n.includes('.') ? n.split('.').pop() : 'file').slice(0, 4);
@@ -124,12 +127,26 @@ export default function Workspace({ caseId, onBack, onLogout }) {
       <Island {...isl} />
       <div className="bar ws-in"><button className="btn alt" onClick={onBack}>Back to cases</button></div>
       {err && <p className="err">{err}</p>}
-      {c && (<>
+      
+
+
+ {c && (<>
         <div className="ws-h ws-in"><div><span className="tag">{c.caseNo}</span><h2 className="disp" style={{ fontSize: '3rem', marginTop: 8 }}>{c.title}</h2></div></div>
         <div className="ws-in"><Dropzone onFiles={upload} /></div>
+
+
+
         {docs.length > 0 && <div className="docs ws-in">{docs.map((d) => (
           <div className="box dc" key={d._id}><span className="fi">{ext(d.name)}</span><div><b>{d.name}</b><br /><small>{Math.max(1, Math.round(d.size / 1024))} KB</small></div></div>
         ))}</div>}
+        {/* NEW: Evidence Wall */}
+        <div className="ws-in">
+        <EvidenceWall
+        caseId={caseId}
+        docs={docs}
+        flags={flags}
+        />
+        </div>
         <div className={'box run ws-in' + (busy ? ' glow' : '')}>
           <div><b>Analysis</b><br /><small>{docs.length ? 'Compare statements and flag what may need checking.' : 'Upload at least one statement first.'}</small></div>
           <button className="btn" disabled={!docs.length || busy} onClick={analyze}>{busy ? 'Analyzing' : 'Run analysis'}</button>
