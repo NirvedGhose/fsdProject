@@ -112,6 +112,19 @@ const auth = async (req, res, next) => {
 const app = express();
 app.use(cors(), express.json());
 
+app.delete('/api/docs/:id', auth, async (req, res) => {
+  const d = await Doc.findOne({ _id: req.params.id, owner: req.user._id });
+  if (!d) return nf(res);
+  const ids = (await Claim.find({ doc: d._id }).select('_id')).map((x) => x._id);
+  await Flag.deleteMany({ claimIds: { $in: ids } });
+  const old = (await Claim.find({ doc: d._id }).select('_id')).map((x) => x._id);
+  await Flag.deleteMany({ claimIds: { $in: old } });
+  await Claim.deleteMany({ doc: d._id });
+  if (d.path) await fs.unlink(d.path).catch(() => {});
+  await d.deleteOne();
+  res.json({ ok: true });
+});
+
 app.post('/api/auth/register', async (req, res) => {
   const name = str(req.body.name), email = str(req.body.email), badgeId = str(req.body.badgeId);
   const password = typeof req.body.password === 'string' ? req.body.password : '';
@@ -254,11 +267,12 @@ app.post('/api/cases/:id/analyze', auth, async (req, res) => {
   } catch (e) { console.error('Claim extraction failed:', e.message); d.status = 'failed'; }
   await d.save();
 }
-  await Flag.deleteMany({ case: c._id, $or: [{ demo: true }, { auto: true }] });
+  await Flag.deleteMany({ case: c._id, demo: true });
 const claims = await Claim.find({ case: c._id }).lean();
 const nameOf = Object.fromEntries(docs.map((d) => [String(d._id), d.name]));
 const span = (x) => x.startTime + (x.endTime ? '–' + x.endTime : '');
 for (const [a, b] of findConflicts(claims)) {
+  if (await Flag.exists({ case: c._id, claimIds: { $all: [a._id, b._id] } })) continue;
   await Flag.create({
     case: c._id, owner: req.user._id, auto: true,
     type: 'Timeline conflict', severity: 'high',
