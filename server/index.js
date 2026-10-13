@@ -1,6 +1,22 @@
 import 'dotenv/config';
-import 'express-async-errors';
 import express from 'express';
+import multer from 'multer';
+import { PDFParse } from 'pdf-parse';
+import mammoth from 'mammoth';
+import path from 'path';
+import fs from 'fs/promises';
+import { extractClaims } from './gemini.js';
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+import 'express-async-errors';
+const upload = multer({
+  dest: path.join(__dirname, 'uploads'),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) =>
+  allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error('UNSUPPORTED_TYPE')),
+});
+
 import cors from 'cors';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
@@ -12,6 +28,14 @@ if (!process.env.JWT_SECRET || !process.env.MONGO_URI) {
 }
 const { Schema, model } = mongoose;
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
+
+const allowed = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'image/jpeg',
+  'image/png'
+];
 
 const User = model('User', new Schema({
   name: { type: String, required: true },
@@ -32,7 +56,13 @@ const Case = model('Case', new Schema({
 const Doc = model('Doc', new Schema({
   case: { type: Schema.Types.ObjectId, ref: 'Case', index: true },
   owner: { type: Schema.Types.ObjectId, ref: 'User' },
-  name: { type: String, required: true }, size: Number, type: String,
+  name: { type: String, required: true },
+  size: Number,
+  type: String,
+  path: { type: String },
+  mimeType: { type: String },
+  extractedText: { type: String },
+  status: { type: String, enum: ['uploaded', 'processing', 'analyzed', 'failed'], default: 'uploaded' },
 }, { timestamps: true }));
 
 const Flag = model('Flag', new Schema({
@@ -43,6 +73,16 @@ const Flag = model('Flag', new Schema({
   quoteA: String, sourceA: String, quoteB: String, sourceB: String,
   status: { type: String, enum: ['open', 'verified', 'dismissed'], default: 'open' },
   demo: { type: Boolean, default: false },
+  auto: { type: Boolean, default: false },
+  claimIds: [{ type: Schema.Types.ObjectId, ref: 'Claim' }],
+}, { timestamps: true }));
+
+const Claim = model('Claim', new Schema({
+  case: { type: Schema.Types.ObjectId, ref: 'Case', index: true },
+  doc: { type: Schema.Types.ObjectId, ref: 'Doc', index: true },
+  owner: { type: Schema.Types.ObjectId, ref: 'User' },
+  type: String, person: String, place: String, date: String,
+  startTime: String, endTime: String, description: String, quote: String,
 }, { timestamps: true }));
 
 const SAMPLE = [
@@ -96,6 +136,12 @@ app.get('/api/auth/me', auth, (req, res) => res.json({ user: pub(req.user) }));
 app.get('/api/cases', auth, async (req, res) =>
   res.json(await Case.find({ owner: req.user._id }).sort('-createdAt')));
 
+app.get('/api/cases/:id/claims', auth, async (req, res) => {
+  const c = await own(req);
+  if (!c) return nf(res);
+  res.json(await Claim.find({ case: c._id }).sort('createdAt'));
+});
+
 app.post('/api/cases', auth, async (req, res) => {
   const title = str(req.body.title);
   if (!title) return res.status(400).json({ error: 'A case title is required.' });
@@ -115,13 +161,77 @@ app.get('/api/cases/:id', auth, async (req, res) => {
   res.json({ case: c, docs: await Doc.find({ case: c._id }).sort('-createdAt'), flags: await Flag.find({ case: c._id }).sort('createdAt') });
 });
 
-app.post('/api/cases/:id/documents', auth, async (req, res) => {
+app.get('/api/docs/:id', auth, async (req, res) => {
+  const doc = await Doc.findOne({ _id: req.params.id, owner: req.user._id });;
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  res.json(doc);
+});
+
+app.post('/api/cases/:id/documents', auth, upload.array('files'), async (req, res) => {
   const c = await own(req);
   if (!c) return nf(res);
-  const name = str(req.body.name);
-  if (!name) return res.status(400).json({ error: 'A file name is required.' });
-  res.json(await Doc.create({ case: c._id, owner: req.user._id, name, size: Number(req.body.size) || 0, type: str(req.body.type) }));
+  if (!req.files || !req.files.length) return res.status(400).json({ error: 'No files uploaded.' });
+  const made = [];
+  for (const f of req.files) {
+    const docData = {
+      case: c._id,
+      owner: req.user._id,
+      name: f.originalname,
+      size: f.size,
+      type: f.mimetype,
+      path: f.path,
+      mimeType: f.mimetype,
+      status: 'uploaded',
+    };
+    let extracted = '';
+    try {
+      if (f.mimetype === 'application/pdf') {
+      const data = await fs.readFile(f.path);
+      const parser = new PDFParse({ data });
+      const pdf = await parser.getText();
+      extracted = pdf.text;
+      await parser.destroy();
+      } else if (f.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        const result = await mammoth.extractRawText({ path: f.path });
+        extracted = result.value;
+      } else if (f.mimetype === 'text/plain') {
+        extracted = await fs.readFile(f.path, 'utf8');
+      } else {
+        // images: no extraction
+        extracted = '';
+      }
+      docData.extractedText = extracted;
+      docData.status = 'uploaded';
+    } catch (e) {
+      console.error('Extraction error:', e);
+      docData.extractedText = '';
+      docData.status = 'failed';
+    }
+    const doc = await Doc.create(docData);
+    made.push(doc);
+  }
+  res.json(made);
 });
+
+// The rule is: same person, different place, overlapping time, same or unknown date.
+const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
+const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const samePlace = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
+const sameDate = (a, b) => !a || !b || norm(a) === norm(b);
+
+function findConflicts(claims) {
+  const p = claims.filter((c) => c.type === 'presence' && c.person && c.place && toMin(c.startTime) !== null);
+  const out = [];
+  for (let i = 0; i < p.length; i++) for (let j = i + 1; j < p.length; j++) {
+    const a = p[i], b = p[j];
+    if (norm(a.person) !== norm(b.person) || !sameDate(a.date, b.date)) continue;
+    if (samePlace(norm(a.place), norm(b.place))) continue;
+    const a1 = toMin(a.startTime), a2 = toMin(a.endTime) ?? a1;
+    const b1 = toMin(b.startTime), b2 = toMin(b.endTime) ?? b1;
+    if (Math.max(a1, b1) <= Math.min(a2, b2)) out.push([a, b]);
+  }
+  return out;
+}
 
 // Demo analysis: seeds sample flags until the Python AI service is connected.
 app.post('/api/cases/:id/analyze', auth, async (req, res) => {
@@ -129,9 +239,37 @@ app.post('/api/cases/:id/analyze', auth, async (req, res) => {
   if (!c) return nf(res);
   const docs = await Doc.find({ case: c._id }).sort('createdAt');
   if (!docs.length) return res.status(400).json({ error: 'Upload at least one statement first.' });
-  await Flag.deleteMany({ case: c._id, demo: true });
-  const a = docs[0].name, b = (docs[1] || docs[0]).name;
-  res.json(await Promise.all(SAMPLE.map((t) => Flag.create({ ...t, case: c._id, owner: req.user._id, demo: true, sourceA: a, sourceB: b }))));
+  for (const d of docs) {
+  if (!d.extractedText?.trim() || d.status === 'analyzed') continue;
+  try {
+    d.status = 'processing'; await d.save();
+    const cl = await extractClaims(d.extractedText);
+    await Claim.deleteMany({ doc: d._id });
+    if (cl.length) await Claim.insertMany(cl.map((x) => ({
+      case: c._id, doc: d._id, owner: req.user._id,
+      type: x.type, person: x.person, place: x.place, date: x.date,
+      startTime: x.startTime, endTime: x.endTime, description: x.description, quote: x.quote,
+    })));
+    d.status = 'analyzed';
+  } catch (e) { console.error('Claim extraction failed:', e.message); d.status = 'failed'; }
+  await d.save();
+}
+  await Flag.deleteMany({ case: c._id, $or: [{ demo: true }, { auto: true }] });
+const claims = await Claim.find({ case: c._id }).lean();
+const nameOf = Object.fromEntries(docs.map((d) => [String(d._id), d.name]));
+const span = (x) => x.startTime + (x.endTime ? '–' + x.endTime : '');
+for (const [a, b] of findConflicts(claims)) {
+  await Flag.create({
+    case: c._id, owner: req.user._id, auto: true,
+    type: 'Timeline conflict', severity: 'high',
+    title: `${a.person} placed at two locations`,
+    quoteA: a.quote, sourceA: nameOf[String(a.doc)],
+    quoteB: b.quote, sourceB: nameOf[String(b.doc)],
+    explanation: `${nameOf[String(a.doc)]} puts ${a.person} at ${a.place} (${span(a)}). ${nameOf[String(b.doc)]} puts them at ${b.place} (${span(b)}). The times overlap, so this may need verification.`,
+    claimIds: [a._id, b._id],
+  });
+}
+res.json(await Flag.find({ case: c._id }).sort('createdAt'));
 });
 
 app.patch('/api/flags/:id', auth, async (req, res) => {
@@ -144,14 +282,24 @@ app.patch('/api/flags/:id', auth, async (req, res) => {
 
 app.delete('/api/cases/:id', auth, async (req, res) => {
   const r = await Case.deleteOne({ _id: req.params.id, owner: req.user._id });
-  if (r?.deletedCount) { await Doc.deleteMany({ case: req.params.id }); await Flag.deleteMany({ case: req.params.id }); }
+  if (r?.deletedCount) {
+    const docsToDelete = await Doc.find({ case: req.params.id });
+    await Promise.all(docsToDelete.map(d => fs.unlink(d.path).catch(() => {})));
+    await Doc.deleteMany({ case: req.params.id });
+    await Flag.deleteMany({ case: req.params.id });
+    await Claim.deleteMany({ case: req.params.id });
+  }
   res.json({ ok: true });
 });
+
+
 
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed' || err.name === 'CastError' || err.name === 'ValidationError')
     return res.status(400).json({ error: 'Invalid request.' });
   if (err.code === 11000) return res.status(409).json({ error: 'An account with this email already exists.' });
+  if (err.message === 'UNSUPPORTED_TYPE') return res.status(400).json({ error: 'Only PDF, DOCX, TXT, JPG or PNG files are allowed.' });
+  if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File is too large (max 10 MB).' });
   console.error(err);
   res.status(500).json({ error: 'Something went wrong on the server.' });
 });

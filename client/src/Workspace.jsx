@@ -34,7 +34,7 @@ function Dropzone({ onFiles }) {
       onDrop={(e) => { e.preventDefault(); setOver(false); take(e.dataTransfer.files); }}>
       <input ref={inp} type="file" multiple hidden onChange={(e) => { take(e.target.files); e.target.value = ''; }} />
       <b className="disp">Drop statements here</b>
-      <span>PDF, DOCX or TXT. Click to choose files. For now only file names and sizes are saved.</span>
+             <span>PDF, DOCX, TXT or image. Click to choose files.</span>
     </div>
   );
 }
@@ -65,13 +65,14 @@ export default function Workspace({ caseId, onBack, onLogout }) {
   useGSAP(() => { if (c) gsap.from('.ws-in', { y: 30, opacity: 0, stagger: 0.08, duration: 0.8, ease: 'power3.out' }); }, { scope: root, dependencies: [c === null] });
 
   const upload = async (files) => {
-    try {
-      const made = [];
-      for (const f of files) made.push(await api(`/cases/${caseId}/documents`, { method: 'POST', body: { name: f.name, size: f.size, type: f.type } }));
-      setDocs((d) => [...made, ...d]);
-      requestAnimationFrame(() => gsap.from('.dc', { y: 16, opacity: 0, stagger: 0.05, duration: 0.5, clearProps: 'all' }));
-    } catch (e) { fail(e); }
-  };
+  try {
+    const fd = new FormData();
+    files.forEach((f) => fd.append('files', f));
+    const made = await api(`/cases/${caseId}/documents`, { method: 'POST', body: fd });
+    setDocs((d) => [...made, ...d]);
+    requestAnimationFrame(() => gsap.from('.dc', { y: 16, opacity: 0, stagger: 0.05, duration: 0.5, clearProps: 'all' }));
+  } catch (e) { fail(e); }
+};
 
   const step = async (text, pct) => { setIsl({ open: true, text, pct }); await wait(750); };
   const analyze = async () => {
@@ -137,7 +138,7 @@ export default function Workspace({ caseId, onBack, onLogout }) {
 
 
         {docs.length > 0 && <div className="docs ws-in">{docs.map((d) => (
-          <div className="box dc" key={d._id}><span className="fi">{ext(d.name)}</span><div><b>{d.name}</b><br /><small>{Math.max(1, Math.round(d.size / 1024))} KB</small></div></div>
+          <div className="box dc" key={d._id}><span className="fi">{ext(d.name)}</span><div><b>{d.name}</b><br /><small>{Math.max(1, Math.round(d.size / 1024))} KB · {d.status}</small></div></div>
         ))}</div>}
         {/* NEW: Evidence Wall */}
         <div className="ws-in">
