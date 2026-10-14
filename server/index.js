@@ -191,6 +191,37 @@ app.get('/api/docs/:id/file', auth, async (req, res) => {
   res.sendFile(path.resolve(d.path));
 });
 
+app.get('/api/cases/:id/graph', auth, async (req, res) => {
+  const c = await own(req);
+  if (!c) return nf(res);
+  const [claims, docs, flags] = await Promise.all([
+    Claim.find({ case: c._id }).lean(), Doc.find({ case: c._id }).lean(), Flag.find({ case: c._id }).lean(),
+  ]);
+  const bad = new Set(flags.filter((f) => f.status !== 'dismissed').flatMap((f) => (f.claimIds || []).map(String)));
+  const nodes = new Map(), edges = new Map();
+  const node = (id, type, label) => { if (!nodes.has(id)) nodes.set(id, { id, type, label }); };
+  const edge = (id, source, target, label, conflict = false) => { if (!edges.has(id)) edges.set(id, { id, source, target, label, conflict }); };
+  docs.forEach((d) => node('d' + d._id, d.mimeType?.startsWith('image/') ? 'image' : 'doc', d.name));
+  for (const k of claims) {
+    const src = 'd' + k.doc;
+    if (k.person) {
+      const p = 'p:' + norm(k.person);
+      node(p, 'person', k.person);
+      edge('m' + src + p, src, p, 'mentions');
+      if (k.place) {
+        const l = 'l:' + norm(k.place);
+        node(l, 'place', k.place);
+        edge('w' + k._id, p, l, 'was_at ' + (k.startTime || ''), bad.has(String(k._id)));
+      }
+    } else if (k.type === 'object' && k.description) {
+      const o = 'o:' + norm(k.description);
+      node(o, 'object', k.description);
+      edge('m' + src + o, src, o, 'mentions');
+    }
+  }
+  res.json({ nodes: [...nodes.values()], edges: [...edges.values()] });
+});
+
 app.post('/api/cases/:id/documents', auth, upload.array('files'), async (req, res) => {
   const c = await own(req);
   if (!c) return nf(res);
