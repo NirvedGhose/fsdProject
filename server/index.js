@@ -5,7 +5,7 @@ import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 import path from 'path';
 import fs from 'fs/promises';
-import { extractClaims } from './gemini.js';
+import { extractClaims, describeImage } from './gemini.js';
 import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,6 +62,10 @@ const Doc = model('Doc', new Schema({
   path: { type: String },
   mimeType: { type: String },
   extractedText: { type: String },
+  aiDescription: String,
+  tags: [String],
+  ocrText: String,
+  officerTags: [String],
   status: { type: String, enum: ['uploaded', 'processing', 'analyzed', 'failed'], default: 'uploaded' },
 }, { timestamps: true }));
 
@@ -102,7 +106,7 @@ const pub = (u) => ({ id: u._id, name: u.name, email: u.email, badgeId: u.badgeI
 
 const auth = async (req, res, next) => {
   try {
-    const t = (req.headers.authorization || '').replace('Bearer ', '');
+    const t = (req.headers.authorization || '').replace('Bearer ', '') || req.query.token || '';
     req.user = await User.findById(jwt.verify(t, process.env.JWT_SECRET).id);
     if (!req.user) throw new Error();
     next();
@@ -180,6 +184,13 @@ app.get('/api/docs/:id', auth, async (req, res) => {
   res.json(doc);
 });
 
+app.get('/api/docs/:id/file', auth, async (req, res) => {
+  const d = await Doc.findOne({ _id: req.params.id, owner: req.user._id });
+  if (!d || !d.path) return nf(res);
+  res.setHeader('Content-Type', d.mimeType || 'application/octet-stream');
+  res.sendFile(path.resolve(d.path));
+});
+
 app.post('/api/cases/:id/documents', auth, upload.array('files'), async (req, res) => {
   const c = await own(req);
   if (!c) return nf(res);
@@ -253,6 +264,23 @@ app.post('/api/cases/:id/analyze', auth, async (req, res) => {
   const docs = await Doc.find({ case: c._id }).sort('createdAt');
   if (!docs.length) return res.status(400).json({ error: 'Upload at least one statement first.' });
   for (const d of docs) {
+  if (d.mimeType?.startsWith('image/')) {
+    if (d.status === 'analyzed') continue;
+    try {
+      d.status = 'processing';
+      await d.save();
+      const r = await describeImage(d.path, d.mimeType);
+      d.aiDescription = r.description;
+      d.tags = r.tags;
+      d.ocrText = r.ocrText;
+      d.status = 'analyzed';
+    } catch (e) {
+      console.error('Image analysis failed:', e.message);
+      d.status = 'failed';
+    }
+    await d.save();
+    continue;
+  }
   if (!d.extractedText?.trim() || d.status === 'analyzed') continue;
   try {
     d.status = 'processing'; await d.save();

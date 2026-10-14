@@ -1,3 +1,4 @@
+import fs from 'fs/promises';
 import { GoogleGenAI } from '@google/genai';
 
 const PROMPT = `You extract factual claims from a witness or police statement. Return ONLY JSON: {"claims":[{"type":"presence|object|event","person":string|null,"place":string|null,"date":string|null,"startTime":"HH:MM"|null,"endTime":"HH:MM"|null,"description":string,"quote":string}]}
@@ -42,6 +43,25 @@ export async function extractClaims(text) {
         await sleep(attempt * 2000);
         }
     }
+  }
+  throw lastErr;
+}
+
+export async function describeImage(filePath, mimeType) {
+  const data = (await fs.readFile(filePath)).toString('base64');
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const prompt = 'Describe only what is visible in this image. Never conclude what happened. Return JSON: {"description": "one neutral sentence", "tags": ["short tags"], "ocrText": "visible text or empty string"}';
+  let lastErr;
+  for (const model of MODELS) {
+    try {
+      const r = await ai.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType, data } }, { text: prompt }] }],
+        config: { responseMimeType: 'application/json', temperature: 0 },
+      });
+      const o = JSON.parse(r.text);
+      return { description: o.description || '', tags: o.tags || [], ocrText: o.ocrText || '' };
+    } catch (e) { lastErr = e; console.log(model, 'image failed:', String(e.message).slice(0, 80)); }
   }
   throw lastErr;
 }
