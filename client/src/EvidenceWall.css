@@ -409,3 +409,5 @@
     height: 500px;
   }
 }
+
+.ew-edge line.bad { stroke: #ef4444; stroke-dasharray: 6 4; stroke-width: 2.5; stroke-opacity: 1; }

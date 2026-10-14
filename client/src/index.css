@@ -226,3 +226,70 @@ blockquote{background:#EEF2F6;border-radius:10px;padding:16px}blockquote small{d
     transition: none;
   }
 }
+
+.dc { display: flex; align-items: center; }
+.dc .x {
+  margin-left: auto; width: 32px; height: 32px; border-radius: 50%;
+  border: 0; background: #ffc400; color: #0a1628;
+  font-size: 20px; line-height: 1; cursor: pointer;
+}
+.dc .x:hover { filter: brightness(1.1); }
+
+/* Delete confirmation popup */
+.cfm {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+
+  width: min(420px, 90vw);
+  padding: 28px 32px;
+
+  background: #fff;
+  color: #0b1525;
+  border-radius: 20px;
+
+  z-index: 9999;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.cfm h3 {
+  margin: 0 0 12px;
+  color: #0b1525;
+}
+
+.cfm p {
+  margin: 0;
+  line-height: 1.5;
+  color: #0b1525;
+}
+
+/* Button alignment */
+.cfm .row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+/* Cancel button */
+.cfm .btn.alt {
+  color: #0b1525;
+  background: #fff;
+  box-shadow: inset 0 0 0 1.5px #0b1525;
+  border: none;
+}
+
+.imgs { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+.thumb { width: 120px; height: 90px; object-fit: cover; border-radius: 10px; cursor: pointer; border: 2px solid #ffc400; }
+
+/* for timeline*/
+.tl { padding: 24px; border: 1px solid var(--rule); border-radius: 18px; background: rgba(9,21,36,.72); margin: 16px 0; display: grid; gap: 10px; }
+.tl-row { display: flex; gap: 16px; padding: 12px; border-left: 4px solid var(--teal); background: #10243c; border-radius: 10px; }
+.tl-row.bad { border-left-color: #ef4444; }
+.tl-row b { min-width: 54px; color: var(--mk); }
+.tl-row strong, .tl-row small { display: block; }
+.tl-gap { padding: 10px; text-align: center; border: 1px dashed #64748b; border-radius: 10px; color: var(--mut);
+  background: repeating-linear-gradient(45deg, transparent 0 8px, rgba(100,116,139,.15) 8px 16px); }
+.pill { display: inline-block; margin-top: 4px; padding: 2px 10px; border-radius: 99px; background: #ef4444; color: #fff; font-size: .7rem; font-weight: 700; }

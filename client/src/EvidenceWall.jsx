@@ -1,7 +1,6 @@
-
 import { useEffect, useMemo, useRef, useState } from 'react';
-
-const TYPES = ['Person', 'Statement', 'Location', 'Event', 'Document'];
+import { api } from './api.js';
+const TYPES = ['Person', 'Statement', 'Location', 'Event', 'Document', 'Object'];
 const RELATIONS = [
   'Related to',
   'Mentioned in',
@@ -10,21 +9,15 @@ const RELATIONS = [
   'Supports',
   'Observed by',
 ];
-
 const COLORS = {
   Person: '#4FD1C5',
   Statement: '#FFC400',
   Location: '#8DB8FF',
   Event: '#D4A5FF',
   Document: '#FFA879',
+  Object: '#A78BFA',
 };
-
-const STARTERS = [
-  { id: 'starter-1', type: 'Person', title: 'Witness A', detail: 'Add a person or witness', x: 70, y: 70 },
-  { id: 'starter-2', type: 'Statement', title: 'Statement 01', detail: 'Add a claim or quotation', x: 350, y: 95 },
-  { id: 'starter-3', type: 'Event', title: 'Reported event', detail: 'Add an event or timestamp', x: 180, y: 310 },
-];
-
+const STARTERS = [];
 export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
   const boardRef = useRef(null);
   const dragRef = useRef(null);
@@ -32,6 +25,7 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
   const movedRef = useRef(false);
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
+  const [history, setHistory] = useState({ past: [], future: [] });
   const [loaded, setLoaded] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -46,15 +40,13 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
     title: '',
     detail: '',
   });
-
   const storageKey = `veritas-evidence-wall-${caseId}`;
-
   useEffect(() => {
     setLoaded(false);
+    setHistory({ past: [], future: [] });
     setSelected([]);
     setZoom(1);
     setOffset({ x: 0, y: 0 });
-
     try {
       const saved = localStorage.getItem(storageKey);
       if (saved) {
@@ -69,23 +61,42 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
       setNodes(STARTERS.map((n) => ({ ...n })));
       setEdges([]);
     }
-
     setLoaded(true);
   }, [storageKey]);
-
   useEffect(() => {
     if (!loaded) return;
     localStorage.setItem(storageKey, JSON.stringify({ nodes, edges }));
   }, [nodes, edges, loaded, storageKey]);
-
   // Add actual case documents and findings to the board.
   useEffect(() => {
     if (!loaded) return;
-
+    api(`/cases/${caseId}/graph`).then((g) => {
+      const T = { person: 'Person', place: 'Location', object: 'Object' };
+      const X = { person: 700, place: 980, object: 1260 };
+      const nid = (id) => (/^d[0-9a-f]{24}$/.test(id) ? 'doc-' + id.slice(1) : 'auto-' + id);
+      const row = {};
+      setNodes((cur) => {
+        const keep = cur.filter((n) => !n.id.startsWith('auto-'));
+        const add = g.nodes.filter((n) => T[n.type]).map((n) => {
+          row[n.type] = (row[n.type] ?? -1) + 1;
+          const old = cur.find((x) => x.id === nid(n.id));
+          return old || { id: nid(n.id), type: T[n.type], title: n.label, detail: 'From analysis', x: X[n.type], y: 60 + row[n.type] * 150 };
+        });
+        return [...keep, ...add];
+      });
+      setEdges((cur) => [
+        ...cur.filter((e) => !e.id.startsWith('auto-')),
+        ...g.edges.map((e) => ({ id: 'auto-' + e.id, source: nid(e.source), target: nid(e.target), label: e.label, conflict: e.conflict })),
+      ]);
+    }).catch(() => {});
+  }, [caseId, docs, flags, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
     setNodes((current) => {
-      let next = [...current];
+        let next = current.filter((n) =>
+        (!n.id.startsWith('doc-') || docs.some((d) => 'doc-' + d._id === n.id)) &&
+        (!n.id.startsWith('flag-') || flags.some((f) => 'flag-' + f._id === n.id)));
       const additions = [];
-
       docs.forEach((doc, i) => {
         const id = `doc-${doc._id}`;
         if (!next.some((n) => n.id === id)) {
@@ -99,7 +110,6 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
           });
         }
       });
-
       flags.forEach((flag, i) => {
         const id = `flag-${flag._id}`;
         if (!next.some((n) => n.id === id)) {
@@ -113,23 +123,120 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
           });
         }
       });
-
       next = [...next, ...additions];
       return next;
     });
   }, [docs, flags, loaded]);
+  // History only records investigator edits, not automatic analysis refreshes.
+  const snap = () => {
+    setHistory((h) => ({
+      past: [...h.past, { nodes, edges }].slice(-30),
+      future: [],
+    }));
+  };
 
-  const visibleNodes = useMemo(() => {
+  const undo = () => {
+    if (!history.past.length) return;
+    const previous = history.past[history.past.length - 1];
+    setHistory((h) => ({
+      past: h.past.slice(0, -1),
+      future: [...h.future, { nodes, edges }],
+    }));
+    setNodes(previous.nodes);
+    setEdges(previous.edges);
+    setSelected([]);
+  };
+
+  const redo = () => {
+    if (!history.future.length) return;
+    const next = history.future[history.future.length - 1];
+    setHistory((h) => ({
+      past: [...h.past, { nodes, edges }].slice(-30),
+      future: h.future.slice(0, -1),
+    }));
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setSelected([]);
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey ||
+          /^(INPUT|SELECT|TEXTAREA)$/.test(e.target?.tagName) ||
+          e.target?.isContentEditable) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        if (history.past.length) { e.preventDefault(); undo(); }
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        if (history.future.length) { e.preventDefault(); redo(); }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
+
+  // Reset only the wall; it never deletes uploaded evidence or database records.
+  const resetBoard = async () => {
+    if (!window.confirm('Reset the wall to the AI analysis? Manual cards, links and positions will be removed. You can Undo this reset.')) return;
+    try {
+      const g = await api(`/cases/${caseId}/graph`);
+      const typeMap = { person: 'Person', place: 'Location', object: 'Object' };
+      const xMap = { person: 700, place: 980, object: 1260 };
+      const nid = (id) => /^d[0-9a-f]{24}$/.test(id) ? 'doc-' + id.slice(1) : 'auto-' + id;
+      const rows = {};
+      const documentNodes = docs.map((doc, i) => ({
+        id: `doc-${doc._id}`, type: 'Document',
+        title: doc.name || 'Untitled document',
+        detail: `${Math.max(1, Math.round((doc.size || 0) / 1024))} KB · Uploaded document`,
+        x: 70 + (i % 3) * 260, y: 480 + Math.floor(i / 3) * 160,
+      }));
+      const flagNodes = flags.map((flag, i) => ({
+        id: `flag-${flag._id}`, type: 'Statement',
+        title: flag.title || 'Finding',
+        detail: `${flag.severity || 'Unspecified'} · ${flag.status || 'Open'} · Finding`,
+        x: 70 + (i % 3) * 260, y: 680 + Math.floor(i / 3) * 160,
+      }));
+      const autoNodes = (g.nodes || []).filter((n) => typeMap[n.type]).map((n) => {
+        rows[n.type] = (rows[n.type] ?? -1) + 1;
+        return {
+          id: nid(n.id), type: typeMap[n.type], title: n.label,
+          detail: 'From analysis', x: xMap[n.type], y: 60 + rows[n.type] * 150,
+        };
+      });
+      const freshNodes = [...documentNodes, ...flagNodes, ...autoNodes];
+      const validIds = new Set(freshNodes.map((n) => n.id));
+      const freshEdges = (g.edges || []).map((e) => ({
+        id: 'auto-' + e.id, source: nid(e.source), target: nid(e.target),
+        label: e.label, conflict: e.conflict,
+      })).filter((e) => validIds.has(e.source) && validIds.has(e.target));
+      snap();
+      setNodes(freshNodes);
+      setEdges(freshEdges);
+      setSelected([]);
+      setSearch('');
+      setFilter('All');
+      setError('');
+      setZoom(1);
+      setOffset({ x: 0, y: 0 });
+      // Existing persistence effect saves this clean board to localStorage.
+    } catch (e) {
+      setError('Could not reload analysis. Your current wall was not changed.');
+    }
+  };
+
+   const visibleNodes = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return nodes.filter((n) => {
-      const matchesType = filter === 'All' || n.type === filter;
-      const matchesSearch =
-        !q ||
-        n.title.toLowerCase().includes(q) ||
-        n.detail.toLowerCase().includes(q);
-      return matchesType && matchesSearch;
+    const hit = nodes.filter((n) =>
+      (filter === 'All' || n.type === filter) &&
+      (!q || n.title.toLowerCase().includes(q) || n.detail.toLowerCase().includes(q)));
+    if (!q) return hit;
+    const ids = new Set(hit.map((n) => n.id));
+    edges.forEach((e) => {
+      if (ids.has(e.source)) ids.add(e.target);
+      if (ids.has(e.target)) ids.add(e.source);
     });
-  }, [nodes, search, filter]);
+    return nodes.filter((n) => ids.has(n.id));
+  }, [nodes, edges, search, filter]);
 
   const addNode = (e) => {
     e.preventDefault();
@@ -137,7 +244,7 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
       setError('Enter a title for this evidence card.');
       return;
     }
-
+    snap();
     setNodes((current) => [
       ...current,
       {
@@ -149,12 +256,10 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
         y: 80 + Math.floor(current.length / 3) * 170,
       },
     ]);
-
     setDraft({ type: 'Person', title: '', detail: '' });
     setError('');
     setShowForm(false);
   };
-
   const toggleSelect = (id) => {
     setSelected((current) => {
       if (current.includes(id)) return current.filter((x) => x !== id);
@@ -162,27 +267,23 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
       return [...current, id];
     });
   };
-
   const connectSelected = () => {
     if (selected.length !== 2) {
       setError('Select two evidence cards first.');
       return;
     }
-
     if (selected[0] === selected[1]) return;
-
     const exists = edges.some(
       (e) =>
         e.source === selected[0] &&
         e.target === selected[1] &&
         e.label === relation
     );
-
     if (exists) {
       setError('That connection already exists.');
       return;
     }
-
+    snap();
     setEdges((current) => [
       ...current,
       {
@@ -195,11 +296,10 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
     setSelected([]);
     setError('');
   };
-
   const removeSelected = () => {
     if (!selected.length) return;
+    snap();
     const ids = [...selected];
-
     setNodes((current) => current.filter((n) => !ids.includes(n.id)));
     setEdges((current) =>
       current.filter((e) => !ids.includes(e.source) && !ids.includes(e.target))
@@ -207,37 +307,35 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
     setSelected([]);
     setError('');
   };
-
   const resetView = () => {
     setZoom(1);
     setOffset({ x: 0, y: 0 });
   };
-
   const onNodePointerDown = (e, node) => {
     if (e.button !== 0) return;
     e.stopPropagation();
-
     dragRef.current = {
       id: node.id,
       startX: e.clientX,
       startY: e.clientY,
       nodeX: node.x,
       nodeY: node.y,
+      snapped: false,
     };
-
     movedRef.current = false;
     e.currentTarget.setPointerCapture(e.pointerId);
   };
-
   const onNodePointerMove = (e) => {
     if (!dragRef.current) return;
-
     const d = dragRef.current;
     const dx = (e.clientX - d.startX) / zoom;
     const dy = (e.clientY - d.startY) / zoom;
-
-    if (Math.abs(dx) + Math.abs(dy) > 3) movedRef.current = true;
-
+    if (Math.abs(dx) + Math.abs(dy) <= 3 && !d.snapped) return;
+    if (!d.snapped) {
+      snap();
+      d.snapped = true;
+    }
+    movedRef.current = true;
     setNodes((current) =>
       current.map((n) =>
         n.id === d.id
@@ -250,14 +348,11 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
       )
     );
   };
-
   const onNodePointerUp = () => {
     dragRef.current = null;
   };
-
   const onBoardPointerDown = (e) => {
     if (e.target !== boardRef.current) return;
-
     panRef.current = {
       x: e.clientX,
       y: e.clientY,
@@ -266,23 +361,17 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
     };
     boardRef.current.setPointerCapture(e.pointerId);
   };
-
   const onBoardPointerMove = (e) => {
     if (!panRef.current) return;
-
     const p = panRef.current;
     setOffset({
       x: p.offsetX + e.clientX - p.x,
       y: p.offsetY + e.clientY - p.y,
     });
   };
-
   const stopPan = () => {
     panRef.current = null;
   };
-
-  const positions = Object.fromEntries(nodes.map((n) => [n.id, n]));
-
   return (
     <section className="ew">
       <div className="ew-heading">
@@ -296,12 +385,10 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
           <span>EVIDENCE ITEMS</span>
         </div>
       </div>
-
       <div className="ew-toolbar">
         <button className="ew-btn ew-primary" onClick={() => setShowForm(!showForm)}>
           {showForm ? 'Cancel' : '+ Add evidence'}
         </button>
-
         <select
           aria-label="Filter evidence type"
           value={filter}
@@ -310,14 +397,12 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
           <option>All</option>
           {TYPES.map((t) => <option key={t}>{t}</option>)}
         </select>
-
         <input
           aria-label="Search evidence"
           placeholder="Search evidence..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-
         <select
           aria-label="Connection type"
           value={relation}
@@ -325,11 +410,9 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
         >
           {RELATIONS.map((r) => <option key={r}>{r}</option>)}
         </select>
-
         <button className="ew-btn" onClick={connectSelected}>
           Connect {selected.length ? `(${selected.length}/2)` : ''}
         </button>
-
         <button
           className="ew-btn"
           disabled={!selected.length}
@@ -337,8 +420,10 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
         >
           Delete selected
         </button>
+        <button className="ew-btn" onClick={undo} disabled={!history.past.length}>Undo</button>
+        <button className="ew-btn" onClick={redo} disabled={!history.future.length}>Redo</button>
+        <button className="ew-btn" onClick={resetBoard}>Reset to analysis</button>
       </div>
-
       {showForm && (
         <form className="ew-form" onSubmit={addNode}>
           <div className="ew-form-grid">
@@ -375,15 +460,12 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
           <button className="ew-btn ew-primary" type="submit">Add to wall</button>
         </form>
       )}
-
       {error && !showForm && <p className="ew-error">{error}</p>}
-
       <div className="ew-instructions">
         <span><i /> Drag cards to arrange them</span>
         <span><i /> Select two cards, then Connect</span>
         <span>{edges.length} connection{edges.length === 1 ? '' : 's'}</span>
       </div>
-
       <div className="ew-canvas-shell">
         <div
           className="ew-canvas"
@@ -400,7 +482,6 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
           }}
         >
           <div className="ew-grid" />
-
           <div
             className="ew-world"
             style={{
@@ -409,20 +490,18 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
           >
             <svg className="ew-lines" width="1800" height="1200">
               {edges.map((edge) => {
-                const a = positions[edge.source];
-                const b = positions[edge.target];
+                const a = visibleNodes.find((n) => n.id === edge.source);
+                const b = visibleNodes.find((n) => n.id === edge.target);
                 if (!a || !b) return null;
-
                 const x1 = a.x + 100;
                 const y1 = a.y + 60;
                 const x2 = b.x + 100;
                 const y2 = b.y + 60;
                 const mx = (x1 + x2) / 2;
                 const my = (y1 + y2) / 2;
-
                 return (
                   <g key={edge.id} className="ew-edge">
-                    <line x1={x1} y1={y1} x2={x2} y2={y2} />
+                    <line x1={x1} y1={y1} x2={x2} y2={y2} className={edge.conflict ? 'bad' : undefined} />
                     <rect x={mx - 48} y={my - 12} width="96" height="24" rx="6" />
                     <text x={mx} y={my + 4} textAnchor="middle">{edge.label}</text>
                     <title>{edge.label}</title>
@@ -430,7 +509,6 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
                 );
               })}
             </svg>
-
             {visibleNodes.map((node) => (
               <div
                 key={node.id}
@@ -464,16 +542,12 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
                 <div className="ew-node-top">
                   <span className="ew-type-dot" />
                   <span>{node.type}</span>
-                  <span className="ew-node-mark">
-                    {selected.includes(node.id) ? '✓' : '+'}
-                  </span>
                 </div>
                 <strong>{node.title}</strong>
                 <p>{node.detail}</p>
               </div>
             ))}
           </div>
-
           {!visibleNodes.length && (
             <div className="ew-no-results">
               No evidence matches your search.
@@ -482,7 +556,6 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
               </button>
             </div>
           )}
-
           <div className="ew-zoom">
             <button aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.55, z - 0.1))}>−</button>
             <span>{Math.round(zoom * 100)}%</span>
@@ -491,12 +564,9 @@ export default function EvidenceWall({ caseId, docs = [], flags = [] }) {
           </div>
         </div>
       </div>
-
       <p className="ew-footnote">
         Evidence cards and connections are organizational aids, not proof of guilt
         or factual verification. Manual board edits are saved in this browser.
-        Document cards represent uploaded metadata; original file contents are not
-        stored by this wall.
       </p>
     </section>
   );
