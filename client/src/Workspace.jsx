@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+<<<<<<< HEAD
 import Timeline from './Timeline.jsx';
+=======
+
+>>>>>>> origin/main
 import gsap from 'gsap';
 import { Flip } from 'gsap/Flip';
 import { useGSAP } from '@gsap/react';
@@ -59,11 +63,14 @@ export default function Workspace({ caseId, onBack, onLogout }) {
   const [busy, setBusy] = useState(false);
   const [dlg, setDlg] = useState(null);
   const [err, setErr] = useState('');
+<<<<<<< HEAD
   const [ask, setAsk] = useState(null);
   const [img, setImg] = useState(null);
   const [tagIn, setTagIn] = useState('');
   const token = localStorage.getItem('vt'); // check api.js: use the same key name it uses
   const imgs = docs.filter((d) => d.mimeType?.startsWith('image/') && d.status === 'analyzed');
+=======
+>>>>>>> origin/main
   const fail = (e) => (e.status === 401 ? onLogout() : setErr(e.message));
 
   useEffect(() => { api('/cases/' + caseId).then((d) => { setC(d.case); setDocs(d.docs); setFlags(d.flags); }).catch(fail); }, [caseId]);
@@ -79,6 +86,7 @@ export default function Workspace({ caseId, onBack, onLogout }) {
   } catch (e) { fail(e); }
 };
 
+<<<<<<< HEAD
     const delDoc = async () => {
     const id = ask._id;
     setAsk(null);
@@ -97,6 +105,8 @@ export default function Workspace({ caseId, onBack, onLogout }) {
     } catch (e) { fail(e); }
   };
 
+=======
+>>>>>>> origin/main
   const step = async (text, pct) => { setIsl({ open: true, text, pct }); await wait(750); };
   const analyze = async () => {
     setBusy(true); setErr('');
@@ -106,7 +116,10 @@ export default function Workspace({ caseId, onBack, onLogout }) {
       await step('Comparing claims', 88);
       const d = await api(`/cases/${caseId}/analyze`, { method: 'POST' });
       setFlags(d);
+<<<<<<< HEAD
       const fresh = await api('/cases/' + caseId); setDocs(fresh.docs);
+=======
+>>>>>>> origin/main
       setIsl({ open: true, text: `${d.length} flags ready for review`, pct: 100 });
       requestAnimationFrame(() => gsap.from('.kc', { y: 30, opacity: 0, stagger: 0.1, duration: 0.7, ease: 'power3.out', clearProps: 'all' }));
       await wait(2200);
@@ -162,10 +175,23 @@ export default function Workspace({ caseId, onBack, onLogout }) {
 
 
         {docs.length > 0 && <div className="docs ws-in">{docs.map((d) => (
+<<<<<<< HEAD
           <div className="box dc" key={d._id}><span className="fi">{ext(d.name)}</span><div><b>{d.name}</b><br /><small>{Math.max(1, Math.round(d.size / 1024))} KB · {d.status}</small></div>
           <button className="x" aria-label="Delete evidence" onClick={() => setAsk(d)}>×</button></div>
         ))}</div>}
        
+=======
+          <div className="box dc" key={d._id}><span className="fi">{ext(d.name)}</span><div><b>{d.name}</b><br /><small>{Math.max(1, Math.round(d.size / 1024))} KB · {d.status}</small></div></div>
+        ))}</div>}
+        {/* NEW: Evidence Wall */}
+        <div className="ws-in">
+        <EvidenceWall
+        caseId={caseId}
+        docs={docs}
+        flags={flags}
+        />
+        </div>
+>>>>>>> origin/main
         <div className={'box run ws-in' + (busy ? ' glow' : '')}>
           <div><b>Analysis</b><br /><small>{docs.length ? 'Compare statements and flag what may need checking.' : 'Upload at least one statement first.'}</small></div>
           <button className="btn" disabled={!docs.length || busy} onClick={analyze}>{busy ? 'Analyzing' : 'Run analysis'}</button>
@@ -202,6 +228,7 @@ export default function Workspace({ caseId, onBack, onLogout }) {
           </div>
         </div>
       </>)}
+<<<<<<< HEAD
       
         {imgs.length > 0 && <div className="imgs ws-in">{imgs.map((d) => (
           <img key={d._id} className="thumb" alt={d.name} src={`/api/docs/${d._id}/file?token=${token}`} onClick={() => setImg(d)} />
@@ -252,6 +279,8 @@ export default function Workspace({ caseId, onBack, onLogout }) {
         </div>
       </>)}
 
+=======
+>>>>>>> origin/main
     </div>
   );
 }
