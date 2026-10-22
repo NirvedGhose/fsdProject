@@ -167,7 +167,7 @@ const own = (req) => Case.findOne({ _id: req.params.id, owner: req.user._id });
 
 const auth = async (req, res, next) => {
   try {
-    const t = (req.headers.authorization || '').replace('Bearer ', '');
+    const t = (req.headers.authorization || '').replace('Bearer ', '') || (/\/file$/.test(req.path) ? String(req.query.token || '') : '');
     req.user = await User.findById(jwt.verify(t, process.env.JWT_SECRET).id);
     if (!req.user) throw new Error();
     next();
@@ -411,6 +411,14 @@ app.patch('/api/flags/:id', auth, async (req, res) => {
   const f = await Flag.findOneAndUpdate({ _id: req.params.id, owner: req.user._id }, { status }, { new: true });
   if (!f) return nf(res);
   res.json(f);
+});
+
+app.patch('/api/docs/:id/tags', auth, async (req, res) => {
+  const tags = Array.isArray(req.body.tags) ? req.body.tags.map(str).filter(Boolean).slice(0, 20) : null;
+  if (!tags) return res.status(400).json({ error: 'Invalid tags.' });
+  const d = await Doc.findOneAndUpdate({ _id: req.params.id, owner: req.user._id }, { officerTags: tags }, { new: true }).select('-fileId -extractedText');
+  if (!d) return nf(res);
+  res.json(d);
 });
 
 app.use('/api', (req, res) => nf(res));

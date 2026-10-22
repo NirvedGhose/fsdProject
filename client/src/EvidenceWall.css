@@ -308,7 +308,9 @@
   line-height: 1.45;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
+  -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .ew-zoom {
@@ -409,8 +411,5 @@
     height: 500px;
   }
 }
-<<<<<<< HEAD
 
 .ew-edge line.bad { stroke: #ef4444; stroke-dasharray: 6 4; stroke-width: 2.5; stroke-opacity: 1; }
-=======
->>>>>>> origin/main
